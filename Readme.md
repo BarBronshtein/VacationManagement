@@ -1,370 +1,455 @@
-Vacation Management
+# Vacation Management
+
+[![Status](https://img.shields.io/badge/status-experimental-orange.svg)](./)
+[![Tech Stack](https://img.shields.io/badge/stack-Node.js%20%7C%20Postgres%20%7C%20Vue%203-blue.svg)](./)
+[![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)](./LICENSE)
+
 Vacation Management is a small full‑stack demo for handling employee vacation requests with role‑based access (Employee vs Manager) and passwordless login via email OTP codes.
 
 Employees submit vacation requests, and managers review, approve, or reject them through a simple web UI.
 
-Stack & Architecture
-Frontend
+---
 
-Vue 3 + TypeScript + Vite (SPA).
+## Table of Contents
 
-Router with two main views: AuthView (login/register) and DashboardView (role‑based dashboards).
+- [Stack & Architecture](#stack--architecture)
+- [Prerequisites](#prerequisites)
+- [Project Structure](#project-structure)
+- [Configuration](#configuration)
+  - [Environment variables (backend)](#environment-variables-backend)
+- [Running the app with Docker](#running-the-app-with-docker-recommended)
+- [Mail setup options](#mail-setup-options)
+  - [Option 1: Local mail testing with MailDev](#option-1-local-mail-testing-with-maildev-no-real-gmail-required)
+  - [Option 2: Real OTP emails using Gmail SMTP](#option-2-real-otp-emails-using-gmail-smtp)
+    - [Enable IMAP in Gmail](#1-enable-imap-in-gmail-once-per-account)
+    - [Turn on 2‑Step Verification](#2-turn-on-2step-verification-if-not-already-enabled)
+    - [Generate an app password (`MAIL_PASS`)](#3-generate-an-app-password-mail_pass)
+    - [Configure backend mail environment](#4-configure-backend-mail-environment)
+- [Running the frontend without Docker](#running-the-frontend-without-docker)
+- [How to use the app](#how-to-use-the-app)
+  - [Registration](#1-registration)
+  - [Login](#2-login-passwordless-via-otp)
+  - [Employee flow](#3-employee-flow)
+  - [Manager flow](#4-manager-flow)
+  - [Logout](#5-logout)
+- [Technical decisions](#technical-decisions)
+- [Known limitations](#known-limitations)
+- [Tips & troubleshooting](#tips--troubleshooting)
 
-Composables (useSession, useVacationRequests) encapsulate auth state and API calls.
+---
 
-Backend
+## Stack & Architecture
 
-Node backend (served on http://localhost:3000) exposing:
+### Frontend
 
-Auth endpoints: /api/auth/register, /api/auth/request-otp, /api/auth/verify-otp.
+- **Framework:** Vue 3 + TypeScript + Vite.  
+- **Routing:** `vue-router` with:
+  - `/auth` – authentication (register, request OTP, verify OTP).
+  - `/app` – main dashboard, guarded by a JWT‑based auth check.
+- **State & data access:**
+  - `useSession` composable for auth state and OTP flow.
+  - `useVacationRequests` composable for CRUD around vacation requests.
+- **UI:**
+  - `AuthView`, `DashboardView`, `EmployeeDashboard`, `ManagerDashboard`,
+    `VacationRequestForm`, `VacationRequestList`, `PendingReviewList`, `RejectReasonModal`.
 
-Vacation endpoints: /api/vacation-requests/requests, /api/vacation-requests/pending, /api/vacation-requests/:id/decision.
+### Backend
 
-Uses JWT for stateless auth; frontend decodes the token to populate the current user.
+- **Runtime:** Node.js backend listening on `http://localhost:3000`.
+- **Auth:**
+  - Endpoints:
+    - `POST /api/auth/register`
+    - `POST /api/auth/request-otp`
+    - `POST /api/auth/verify-otp`
+  - Passwordless login via emailed OTP codes.
+  - JWT returned from `/verify-otp` and stored on the client.
+- **Vacation requests API:**
+  - `GET /api/vacation-requests/requests` – current user’s requests.
+  - `GET /api/vacation-requests/pending` – manager view of pending requests.
+  - `POST /api/vacation-requests/` – create new request.
+  - `POST /api/vacation-requests/:id/decision` – approve/reject with optional comment.
+- **Mail:**
+  - Sends OTP codes via SMTP.
+  - Supports MailDev for local testing or Gmail for real emails.
 
-Sends OTP codes via SMTP (Gmail or MailDev) and persists them in the database.
+### Database (PostgreSQL)
 
-Database (PostgreSQL)
+- Database name: `vacation_db`.
+- Schema (see `postgres/init.sql`):
+  - `user_role` enum: `EMPLOYEE`, `MANAGER`, `ADMIN`.
+  - `vacation_request_status` enum: `PENDING`, `APPROVED`, `REJECTED`.
+  - `users` – base user entity.
+  - `vacation_requests` – requests linked to `users`.
+  - `otp_codes` – one‑time codes with expiry and `used` flag.
 
-Database: vacation_db.
+### Local mail testing (MailDev)
 
-Tables:
+- Docker service: `maildev`.
+- Ports:
+  - SMTP: `1025`
+  - Web UI: `1080` (`http://localhost:1080`)
 
-users (id, email, name, role: EMPLOYEE | MANAGER | ADMIN).
+---
 
-vacation_requests (employeeId, start/end dates, reason, type, status, managerComment).
+## Prerequisites
 
-otp_codes (email, code, expiresAt, used).
+- **Docker** and **Docker Compose**.
+- **Node.js** (only required if running the frontend outside Docker).
+- A **Gmail** account (optional, only if you want real OTP emails).
 
-Local mail testing (MailDev)
+---
 
-MailDev is available as a Docker service:
+## Project Structure
 
-SMTP port: 1025 (for apps to send mail).
+```text
+VacationManagement/
+├─ docker-compose.yml
+├─ .env
+├─ postgres/
+│  └─ init.sql
+├─ vacation_frontend/
+│  ├─ Dockerfile
+│  ├─ package.json
+│  ├─ src/
+│  │  ├─ main.ts
+│  │  ├─ App.vue
+│  │  ├─ router/
+│  │  │  └─ index.ts
+│  │  ├─ composables/
+│  │  │  ├─ useSession.ts
+│  │  │  ├─ useVacationRequests.ts
+│  │  │  └─ storage.helper.ts
+│  │  ├─ views/
+│  │  │  ├─ AuthView.vue
+│  │  │  └─ DashboardView.vue
+│  │  └─ components/
+│  │     ├─ EmployeeDashboard.vue
+│  │     ├─ ManagerDashboard.vue
+│  │     ├─ VacationRequestForm.vue
+│  │     └─ VacationRequestList.vue
+└─ vacation/
+   └─ ... (backend sources, Dockerfile)
+```
 
-Web UI: http://localhost:1080 to inspect captured emails.
+---
 
-Prerequisites
-Docker and Docker Compose installed on your machine.
+## Configuration
 
-Node.js (if you want to run the frontend directly instead of via Docker).
+### Environment variables (backend)
 
-A Gmail account if you want to send real OTP emails via Gmail (instead of using MailDev).
+You can configure the backend via:
 
-Project Structure
-At the repo root:
-
-docker-compose.yml – orchestrates Postgres, MailDev, backend, and frontend.
-
-postgres/init.sql – creates DB, enums (user_role, vacation_request_status), and tables.
-
-vacation_frontend/ – Vite + Vue 3 frontend app (login, dashboard, forms, lists).
-
-Configuration
-Environment variables (backend)
-The backend uses environment variables for DB, JWT, and mail configuration. When running via Docker Compose, these are set in docker-compose.yml. For running the backend directly, .env is provided with the same keys (fill in the values before running).
+- The root `.env` file (used when running directly).
+- The `backend` service `environment` block in `docker-compose.yml`.
 
 Key variables:
 
-Database
+```env
+# ─── Database ──────────────────────────────────────────────
+DATABASE_URL=postgres://postgres:password@postgres:5432/vacation_db
+DATABASE_HOST=postgres
+DATABASE_PORT=5432
+DATABASE_USER=postgres
+DATABASE_PASSWORD=password
+DB_HOST=postgres
+DB_PORT=5432
+DB_USERNAME=postgres
+DB_PASSWORD=password
+DB_DATABASE=vacation_db
+DB_SYNCHRONIZE=true
 
-DATABASE_URL, DB_HOST, DB_PORT, DB_USERNAME, DB_PASSWORD, DB_DATABASE, DB_SYNCHRONIZE.
+# ─── JWT ───────────────────────────────────────────────────
+JWT_SECRET=my-secret-JWt-Secret!@45-343
 
-JWT
+# ─── Mail ──────────────────────────────────────────────────
+MAIL_HOST=smtp.gmail.com          # or 'maildev' in Docker network
+MAIL_PORT=587                     # or 1025 for MailDev
+MAIL_USER=ENTER_YOUR_GMAIL
+MAIL_PASS=ENTER_YOUR_APP_PASSWORD
+MAIL_FROM=ENTER_YOUR_GMAIL
+APP_NAME=Vacation Management
+```
 
-JWT_SECRET.
+> **Note:** For security, do **not** commit `.env` with real credentials. Use `.env.example` in public repos.
 
-Mail
+---
 
-MAIL_HOST – e.g. smtp.gmail.com (for Gmail) or maildev (for local MailDev).
+## Running the app with Docker (recommended)
 
-MAIL_PORT – 587 for Gmail (TLS) or 1025 for MailDev.
+1. **Clone the repository**
 
-MAIL_USER – your Gmail address.
+   ```bash
+   git clone https://github.com/BarBronshtein/VacationManagement.git
+   cd VacationManagement
+   ```
 
-MAIL_PASS – Gmail app password (see “How to get MAIL_PASS” below).
+2. **Configure mail settings**
 
-MAIL_FROM – sender email (usually the same Gmail).
+   Decide whether to use:
 
-APP_NAME – display name used in email subjects/bodies.
+   - [MailDev (local, no real emails)](#option-1-local-mail-testing-with-maildev-no-real-gmail-required), or
+   - [Gmail SMTP (real OTP emails)](#option-2-real-otp-emails-using-gmail-smtp).
 
-Important: Do not commit your real MAIL_USER / MAIL_PASS to Git.
+3. **Start the stack**
 
-Running the app with Docker (recommended)
-Clone the repository
+   ```bash
+   docker compose up --build
+   ```
 
-bash
-git clone https://github.com/BarBronshtein/VacationManagement.git
-cd VacationManagement
-Configure mail settings Decide whether you want to:
+4. **Open the UI**
 
-Use MailDev (no real emails, good for local testing).
+   - Frontend: `http://localhost:5173`
+   - MailDev UI: `http://localhost:1080` (if using MailDev)
 
-Use real Gmail (actual OTP emails sent to inbox).
+5. **Stop everything**
 
-See the next section (“Mail setup options”) for specific environment changes.
+   ```bash
+   docker compose down
+   ```
 
-Start all services
+---
 
-bash
-docker compose up --build
-This will:
+## Mail setup options
 
-Start Postgres (vacation_db) and run postgres/init.sql.
+### Option 1: Local mail testing with MailDev (no real Gmail required)
 
-Build and run the backend on http://localhost:3000.
+Use this to avoid sending real emails during development.
 
-Build and run the frontend on http://localhost:5173.
+1. **Set backend mail variables for MailDev**
 
-Start MailDev on http://localhost:1080 (if configured).
+   In `docker-compose.yml` (backend service):
 
-Open the app
+   ```yaml
+   environment:
+     MAIL_HOST: maildev
+     MAIL_PORT: 1025
+     MAIL_USER: dev@example.com
+     MAIL_PASS: dev
+     MAIL_FROM: dev@example.com
+     APP_NAME: Vacation Management (Dev)
+   ```
 
-Frontend: http://localhost:5173
+2. **Start Docker Compose**
 
-MailDev (if using): http://localhost:1080
+   ```bash
+   docker compose up --build
+   ```
 
-Stop the stack
+3. **Get OTP codes**
 
-bash
-docker compose down
-Mail setup options
-Option 1: Local mail testing with MailDev (no real Gmail required)
-Use this when you want to test OTP flows without sending real emails.
+   - Open `http://localhost:1080`.
+   - Every login request will generate an email containing a 6‑digit code.
 
-Backend mail variables Configure the backend to send mail to the MailDev container:
+---
 
-MAIL_HOST=maildev
+### Option 2: Real OTP emails using Gmail SMTP
 
-MAIL_PORT=1025
+#### 1. Enable IMAP in Gmail (once per account)
 
-MAIL_USER / MAIL_PASS / MAIL_FROM can be dummy values; MailDev does not enforce real credentials.
+1. Sign in to Gmail in your browser.
+2. Click the **gear** icon → **See all settings**.
+3. Go to the **Forwarding and POP/IMAP** tab.
+4. Under **IMAP access**, select **Enable IMAP** and **Save Changes**.
 
-If you are using Docker Compose, set these in the backend service’s environment in docker-compose.yml.
+#### 2. Turn on 2‑Step Verification (if not already enabled)
 
-Run Docker Compose
+1. Open your **Google Account** → **Security**.
+2. Under **How you sign in to Google**, enable **2‑Step Verification**.
+3. Complete the setup (phone, SMS, or authenticator app).
 
-bash
-docker compose up --build
-Inspect OTP emails
+#### 3. Generate an app password (`MAIL_PASS`)
 
-Open http://localhost:1080.
+1. Visit `https://myaccount.google.com/apppasswords` in your browser.
+2. Choose:
+   - App: **Mail** (or “Other (Custom name)”, e.g. `VacationManagement`).
+   - Device: any value you like.
+3. Click **Generate** – Google will show a 16‑character app password.
+4. Copy it and keep it safe; this string is your `MAIL_PASS`.
 
-Each login request will create an email containing the OTP code in the MailDev UI.
+> **Important:** This is **not** your normal Gmail password. It only works for SMTP/IMAP clients and can be revoked at any time.
 
-Option 2: Real OTP emails using Gmail SMTP
-Use this when you want users to receive OTP codes in their real Gmail inbox.
+#### 4. Configure backend mail environment
 
-1. Enable IMAP in Gmail (once per account)
-While IMAP is primarily for reading mail, many guides recommend enabling it when using Gmail with mail clients and app passwords.
+Update your environment (either `.env` or `docker-compose.yml`):
 
-Steps:
-
-Sign in to your Gmail account in a browser.
-
-Click the gear icon → See all settings.
-
-Go to the Forwarding and POP/IMAP tab.
-
-Under IMAP access, select Enable IMAP and click Save Changes.
-
-2. Turn on 2‑Step Verification (if not already enabled)
-You must have 2‑Step Verification enabled on your Google account to create app passwords.
-
-High‑level steps:
-
-Go to your Google Account → Security.
-
-Under How you sign in to Google, choose 2‑Step Verification and complete the setup (phone verification, etc.).
-
-3. Generate an app password (MAIL_PASS)
-MAIL_PASS is a Gmail app password, not your main Google password.
-
-Visit the App passwords page (you may need to sign in): https://myaccount.google.com/apppasswords.
-
-Choose:
-
-App: Mail (or “Other (Custom name)” and type something like VacationManagement).
-
-Device: your choice (or “Other”).
-
-Click Generate to get a 16‑character app password.
-
-Copy this value – this is what you put in MAIL_PASS.
-
-You can revoke or regenerate app passwords any time from the same page.
-
-4. Configure backend mail environment
-Set the following values (either in .env if running directly, or in the backend service environment in docker-compose.yml):
-
-text
+```env
 MAIL_HOST=smtp.gmail.com
 MAIL_PORT=587
-MAIL_USER=your_gmail_address@gmail.com
-MAIL_PASS=the_16_char_app_password_from_step_3
-MAIL_FROM=your_gmail_address@gmail.com
+MAIL_USER=your_email@gmail.com
+MAIL_PASS=16_char_app_password_from_step_3
+MAIL_FROM=your_email@gmail.com
 APP_NAME=Vacation Management
-Gmail’s SMTP server supports TLS on port 587.
+```
 
-Running the frontend without Docker
-If you already have the backend running (via Docker or separately), you can run the Vue app directly:
+---
 
-Install dependencies:
+## Running the frontend without Docker
 
-bash
-cd vacation_frontend
-npm install
-Start the dev server:
+If you want to run only the frontend locally (and point it to an existing backend):
 
-bash
-npm run dev
-Open http://localhost:5173 in your browser.
+1. **Install dependencies**
 
-The frontend expects the API on http://localhost:3000 (see the hardcoded API_BASE_URL in useSession.ts and useVacationRequests.ts), so if you run the backend on a different host/port you must adjust those constants or inject them via environment variables.
+   ```bash
+   cd vacation_frontend
+   npm install
+   ```
 
-How to use the app
-1. Registration
-Open http://localhost:5173.
+2. **Start the dev server**
 
-In the Auth page, switch to the Register tab.
+   ```bash
+   npm run dev
+   ```
 
-Fill in:
+3. **Open the app**
 
-Name
+   - Visit `http://localhost:5173`.
 
-Email
+> The frontend expects the backend at `http://localhost:3000`.  
+> If your backend runs elsewhere, adjust the hardcoded `API_BASE_URL` in:
+> - `src/composables/useSession.ts`
+> - `src/composables/useVacationRequests.ts`
 
-Role:
+---
 
-EMPLOYEE – can create vacation requests.
+## How to use the app
 
-MANAGER – can review and approve/reject requests.
+### 1. Registration
 
-Submit the form; a user record is created in the database.
+1. Go to `http://localhost:5173`.
+2. On the **Auth** page, click the **Register** tab.
+3. Fill in:
+   - **Name**
+   - **Email**
+   - **Role**
+     - `EMPLOYEE` – can create vacation requests.
+     - `MANAGER` – can review and approve/reject.
+4. Click **Register**.
+5. On success, you’ll see a success message; you can now log in with OTP.
 
-2. Login (passwordless, via OTP)
-In the Login tab, enter your email and click Send OTP.
+### 2. Login (passwordless, via OTP)
 
-If using MailDev:
+1. On the **Auth** page, in the **Login** tab:
+   - Enter your email.
+   - Click **Send OTP**.
+2. Retrieve the code:
+   - Using MailDev: open `http://localhost:1080` and open the latest email.
+   - Using Gmail: open your inbox for the same email address.
+3. Copy the 6‑digit OTP.
+4. Paste it in the **OTP Code** field and click **Verify OTP**.
+5. On success:
+   - You are redirected to `/app`.
+   - A JWT is stored (localStorage + cookie) and used for subsequent API calls.
 
-Open http://localhost:1080 and find the email with the OTP code.
+### 3. Employee flow
 
-If using Gmail:
+Once logged in as an `EMPLOYEE`:
 
-Open your Gmail inbox and locate the OTP email.
+- You see the **Employee Dashboard**.
+
+**Create a request**
+
+1. In the **New request** card:
+   - Pick **Start date**.
+   - Pick **End date**.
+   - Optionally fill the **Reason** text area.
+2. Click **Submit request**.
+3. On success, you’ll see a “Request created.” message, and the request appears in **My requests** with status `PENDING`.
 
-Enter the 6‑digit code in the OTP form and click Verify OTP.
+**View my requests**
 
-On success:
+- **My requests** shows:
+  - Date range.
+  - Reason.
+  - Status (`PENDING`, `APPROVED`, `REJECTED`).
+  - If rejected, a “Rejection reason” line.
 
-The backend returns a JWT.
+### 4. Manager flow
 
-The frontend saves the token in localStorage and cookies, and decodes it to set currentUser.
+Once logged in as a `MANAGER`:
 
-Subsequent visits will auto‑restore the session as long as the JWT is valid.
+- You see the **Manager Dashboard**.
 
-3. Employee flow
-Once logged in as an EMPLOYEE:
+**Review pending requests**
 
-You are redirected to /app and see the Employee Dashboard.
+1. The **Pending requests** card lists all requests with status `PENDING`.
+2. For each request, you can:
+   - Click **Approve** – sets status to `APPROVED`.
+   - Click **Reject** – opens a modal to enter a rejection reason.
 
-Create a new vacation request:
+**Rejecting with a reason**
 
-Fill Start date, End date, and an optional Reason.
-
-Click Submit request.
-
-The request appears in “My requests” with status PENDING.
-
-View your requests:
-
-“My requests” lists all your requests, sorted by start date (newest first).
-
-Each item shows dates, reason, status, and (if rejected) the manager’s comment.
-
-4. Manager flow
-Once logged in as a MANAGER:
-
-You are redirected to /app and see the Manager Dashboard.
-
-View pending requests:
-
-“Pending requests” lists all PENDING vacation requests.
-
-Approve a request:
-
-Click approve; status changes to APPROVED.
-
-Reject a request:
-
-Click reject; a modal opens asking for a rejection reason.
-
-Submit a reason; status changes to REJECTED, and the comment is stored.
-
-5. Logout
-Click the Logout button in the top‑right bar of the dashboard.
-
-This clears the stored token and redirects you back to the Auth page.
-
-Technical decisions
-Vue 3 + <script setup> + TypeScript
-
-Simplified SFC syntax with strong typing and better DX for composables.
-
-Composable‑based auth and requests
-
-useSession centralizes auth state, JWT handling, and OTP flows.
-
-useVacationRequests centralizes all vacation API calls and reactive lists.
-
-JWT stored in both localStorage and cookies
-
-Token is saved to localStorage and a cookie; bootstrap() attempts to restore on page load, and expires cookies based on the token’s exp field.
-
-Role‑based routing
-
-A global navigation guard redirects anonymous users away from /app and prevents authenticated users from going back to /auth while the token is valid.
-
-Postgres with enum types
-
-user_role and vacation_request_status enums enforce valid roles and statuses at the DB level.
-
-MailDev integration for local development
-
-Optional MailDev container allows testing the entire OTP flow without hitting external SMTP.
-
-Known limitations
-Backend service discovery
-
-Frontend assumes the API is at http://localhost:3000. Changing the backend host/port requires code changes (no configurable VITE_API_BASE_URL used in the composables yet).
-
-Simplified business logic
-
-No vacation balance tracking, overlapping‑request detection, or approval chains (any manager can see/decide on all pending requests).
-
-Basic security
-
-OTP implementation is minimal and demo‑oriented:
-
-No rate limiting on OTP requests.
-
-No CAPTCHAs or additional throttling.
-
-No admin UI
-
-Role assignment is only done at registration; there is no admin interface to promote/demote users or manage accounts.
-
-Email provider assumptions
-
-README and configuration primarily target Gmail SMTP. Other providers would require manual configuration and are not documented here.
-
-Tips & troubleshooting
-If you don’t see OTP emails:
-
-MailDev: confirm MAIL_HOST=maildev and MAIL_PORT=1025, and that the maildev service is up.
-
-Gmail: verify IMAP is enabled, 2‑Step Verification is on, and MAIL_PASS is the latest generated app password.
-
-If you get “password incorrect” with Gmail app password:
-
-Regenerate the app password and update MAIL_PASS; app passwords can be revoked or rotated at any time.
+1. Click **Reject**.
+2. In the modal, type a clear rejection reason.
+3. Click **Confirm**:
+   - Status becomes `REJECTED`.
+   - The comment is stored as `managerComment` and visible to the employee.
+
+### 5. Logout
+
+- In the top bar, click **Logout**.
+- This clears the token from storage and redirects back to `/auth`.
+
+---
+
+## Technical decisions
+
+- **Vue 3 + `<script setup>` + TypeScript**
+  - Concise syntax and type‑safe components/composables.
+- **Composable‑based architecture**
+  - `useSession` and `useVacationRequests` encapsulate API concerns and expose only minimal reactive state to components.
+- **JWT + localStorage + HTTP‑only‑like cookie**
+  - Tokens are:
+    - Saved in localStorage (simple persistence).
+    - Mirrored to a cookie with expiration aligned to JWT `exp`.
+  - On app bootstrap, token is read back and validated before restoring the session.
+- **Postgres enums and foreign keys**
+  - DB enforces valid values and referential integrity (e.g. `vacation_requests.employeeId` references `users.id`).
+- **MailDev integration**
+  - Dockerized mail catcher for local dev, no external dependencies.
+- **Simple, role‑based routing**
+  - Global guard on router:
+    - Redirects `/app` to `/auth` if not authenticated.
+    - Redirects `/auth` to `/app` if already authenticated and token not expired.
+
+---
+
+## Known limitations
+
+- **Backend discovery**
+  - Frontend assumes backend is at `http://localhost:3000` and does not yet use `VITE_API_BASE_URL` for dynamic configuration.
+- **Business rules**
+  - No vacation balance/allowance logic.
+  - No overlap detection for conflicting vacations.
+  - Any manager can see all pending requests; no per‑team scoping.
+- **Security**
+  - No rate limiting on OTP endpoints.
+  - No CAPTCHA or anti‑abuse measures.
+  - Demo JWT secret in `.env` – replace in production.
+- **Admin tooling**
+  - No admin UI for managing users, roles, or system settings.
+- **Email providers**
+  - Only Gmail and MailDev are documented. Other SMTP providers may require additional configuration (TLS, ports, auth).
+
+---
+
+## Tips & troubleshooting
+
+- **No OTP email in MailDev**
+  - Check:
+    - `MAIL_HOST=maildev`
+    - `MAIL_PORT=1025`
+    - `maildev` container is running.
+- **No OTP email in Gmail**
+  - Verify:
+    - IMAP enabled in Gmail settings.
+    - 2‑Step Verification enabled.
+    - App password (`MAIL_PASS`) is valid and copied correctly.
+- **“Authentication failed” from Gmail**
+  - Regenerate an app password and update `MAIL_PASS`.
+  - Wait up to a minute and retry; old app passwords stop working immediately when revoked.
+
+---
+
+## License
+
+This project is licensed under the MIT License. See the `LICENSE` file for details.
