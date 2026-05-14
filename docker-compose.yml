@@ -1,0 +1,94 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: app_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: vacation_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/01_init.sql:ro
+      - ./postgres/seed.sql:/docker-entrypoint-initdb.d/02_seed.sql:ro
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d vacation_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - app_net
+
+  maildev:
+    image: maildev/maildev:latest
+    container_name: app_maildev
+    restart: unless-stopped
+    ports:
+      - "1080:1080"   # web UI
+      - "1025:1025"   # SMTP
+    networks:
+      - app_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: vacation/Dockerfile
+    container_name: app_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://postgres:password@postgres:5432/vacation_db
+      DATABASE_HOST: postgres
+      DATABASE_PORT: 5432
+      DATABASE_USER: postgres
+      DATABASE_PASSWORD: password
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_USERNAME: postgres
+      DB_PASSWORD: password
+      DB_DATABASE: vacation_db
+      DB_SYNCHRONIZE: "true"
+      JWT_SECRET: my-secret-JWt-Secret!@45-343
+      MAIL_HOST: smtp.gmail.com
+      MAIL_PORT: 587
+      MAIL_USER: "bar.bron10@gmail.com"
+      MAIL_PASS: "drxq uqxh wihk lkeb"
+      MAIL_FROM: bar.bron10@gmail.com
+      APP_NAME: Vacation Management
+    ports:
+      - "3000:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      maildev:
+        condition: service_started
+    volumes:
+      - ./vacation/src:/app/src
+    networks:
+      - app_net
+
+  frontend:
+    build:
+      context: .
+      dockerfile: vacation_frontend/Dockerfile
+    container_name: app_frontend
+    restart: unless-stopped
+    environment:
+      VITE_API_BASE_URL: http://localhost:3000
+      VITE_APP_NAME: Vacation Management
+    ports:
+      - "5173:5173"
+    depends_on:
+      - backend
+    volumes:
+      - ./vacation_frontend/src:/app/src
+    networks:
+      - app_net
+
+volumes:
+  postgres_data:
+
+networks:
+  app_net:
+    driver: bridge
